@@ -1,13 +1,13 @@
-import jieba
-from jieba import analyse
+from ltp import LTP  # poetry add ltp = "^4.2.14"  torch = "^2.3.1"   transformers = "^4.42.4"   pygtrie = "^2.5.0"   keybert = "^0.8.5"
 from collections import Counter
 import json
 import pandas as pd
 from datetime import datetime
-import pymysql
 import time
 import sys
 import os
+from pathlib import Path
+import argparse
 from keybert import KeyBERT
 
 def get_main_texts(json_file):
@@ -38,7 +38,7 @@ def get_main_texts(json_file):
     return wid_texts, min_publish_time, max_publish_time
 
 def group_texts_by_title(analyze_file, wid_texts, output_file):
-    # 读取文件A
+    # 读取文件
     with open(analyze_file, 'r', encoding='utf-8') as file:
         data_analyze = json.load(file)
     # 根据titleid将文件C中的JSON对象进行分组
@@ -73,87 +73,140 @@ def group_texts_by_title(analyze_file, wid_texts, output_file):
         json.dump(json_collection, file, ensure_ascii=False, indent=4)
 
 
-def keybert_e_result(texts,top_n = 20):
+def keybert_e_result_useLTP(texts, top_n = 20):
 
+    # 停用词表
+    stop_words = set()
+    with open(stopwords_file, 'r', encoding='utf-8') as file:
+        for line in file:
+            stop_words.add(line.strip())
+    # keybert模型
     kw_model = KeyBERT(model='paraphrase-multilingual-MiniLM-L12-v2')
-    print("naive ...")
-
+    
     keyword_freq = Counter() 
-    # 遍历文本列表
-    for text in texts:
-        # keybert+jieba
-        text = " ".join(jieba.cut(text))
-        keywords_pro = kw_model.extract_keywords(text)
-        keywords = [kw[0] for kw in keywords_pro]
+    # 哈工大ltp工具进行批量分词
+    ltp = LTP("/home/zsdx/Desktop/ltp_model/small")
+    seg_texts = ltp.pipeline(texts, tasks=["cws"]) 
+    # 每一个text关键词提取
+    for seg_text in seg_texts[0]:   # seg_texts[0]表示cws即分词结果
 
-        words = jieba.lcut(text)
-        key_words = [word for word in words if word in keywords]
-        # 统计关键词的词频
-        keyword_freq.update(key_words)
-
-    # return keyword_freq.most_common(top_n)
+        # text中的词过滤掉停用词
+        words = [word for word in seg_text if word not in stop_words]
+        # 过滤后，连接
+        seg_text = " ".join(words)
+        # keybert关键词提取的结果
+        keybert_e_result = kw_model.extract_keywords(seg_text)
+        # 从结果中获得关键词
+        keywords = [kw[0] for kw in keybert_e_result]
+        # text中的词过滤掉非关键词
+        keywords_in_seg_text = [word for word in words if word in keywords]
+        # 统计text中剩下的词（全为关键词）的词频
+        keyword_freq.update(keywords_in_seg_text)
+    
     result = []
     for word, freq in keyword_freq.most_common(top_n):
         result.append({"name": word, "value": freq})
 
-    return {"data": result}
+    return result
 
-def title_word_count(grouped_json_file, output_dir):
+def title_word_count(grouped_json_file, total_count_output_file):
+    title_wordcount = {}
+    total_count = Counter()
     with open(grouped_json_file, 'r', encoding='utf-8') as file:
         data = json.load(file)
         for json_obj in data:
             title_id = json_obj['id']
             title = json_obj['title']
             texts = json_obj['texts']
-            result = keybert_e_result(texts)
+            result = keybert_e_result_useLTP(texts)
+            title_wordcount[title_id] = result
             # df = pd.DataFrame(result, columns=['Keyword', 'Count'])
             # 获取当前脚本文件的路径
-            current_file = os.path.abspath(__file__)
-            # 获取当前文件所在目录的路径
-            current_dir = os.path.dirname(current_file)
-            # 创建结果文件夹路径
-            result_dir = os.path.join(current_dir, output_dir)
-            # 检查结果文件夹是否存在，如果不存在则创建
-            if not os.path.exists(result_dir):
-                os.makedirs(result_dir)
+            # current_file = os.path.abspath(__file__)
+            # # 获取当前文件所在目录的路径
+            # current_dir = os.path.dirname(current_file)
+            # # 创建结果文件夹路径
+            # result_dir = os.path.join(current_dir, output_dir)
+            # # 检查结果文件夹是否存在，如果不存在则创建
+            # if not os.path.exists(result_dir):
+            #     os.makedirs(result_dir)
 
-            output_file = ""
-            if title_id is not None and title is not None:
-                output_file = os.path.join(result_dir, f"{title_id}_{title}_wordcount.json")
-            else:
-                # 提供一个默认的文件名
-                output_file = os.path.join(result_dir, f"{title_id}_no_title__default_wordcount.json")
+            # output_file = ""
+            # if title_id is not None and title is not None:
+            #     output_file = os.path.join(result_dir, f"{title_id}_{title}_wordcount.json")
+            # else:
+            #     # 提供一个默认的文件名
+            #     output_file = os.path.join(result_dir, f"{title_id}_no_title_default_wordcount.json")
 
-            # df.to_csv(output_file, index=False)
-            with open(output_file, 'w', encoding='utf-8') as outfile:
-                json.dump(result, outfile, ensure_ascii=False, indent=2)
-            print("结果已保存到", output_file)
-    
+            # # df.to_csv(output_file, index=False)
+            # with open(output_file, 'w', encoding='utf-8') as outfile:
+            #     json.dump(result, outfile, ensure_ascii=False, indent=2)
+            # print("结果已保存到", output_file)
+
+    for result in title_wordcount.values():
+        for item in result:
+            word = item['name']
+            freq = item['value']
+            total_count[word] += freq
+
+    total_json = []
+    for word, freq in total_count.most_common(50):
+        total_json.append({"name": word, "value": freq})
+    with open(total_count_output_file, 'w', encoding='utf-8') as outfile:
+        json.dump({"data": total_json}, outfile, ensure_ascii=False, indent=2)
+
     # 删除grouped_json_file文件
     os.remove(grouped_json_file)
-    print("...finished")
+    print("已生成总词频文件：" + total_count_output_file)
+    return title_wordcount
 
+def merge(title_word_count, analyse_result_file, output_file):
+    with open(analyse_result_file, 'r', encoding='utf-8') as file:
+        analyze_data = json.load(file)
+    for key, value in analyze_data.items():
+        if title_word_count[key]:
+            value["word_count"] = title_word_count[key]
+    with open(output_file, 'w', encoding='utf-8') as file:
+        json.dump(analyze_data, file, ensure_ascii=False, indent=4)
+    print("...单事件词频已合并到：" + output_file)
 
-def do_process(json_file, analyse_result_file, grouped_output_file,output_dir):
+def do_process(json_file, analyse_result_file, grouped_output_file,total_count_output_file, output_file):
     s_t = time.time()
     wid_texts, min_time, max_time = get_main_texts(json_file)
     group_texts_by_title(analyse_result_file, wid_texts, grouped_output_file)
-    title_word_count(grouped_output_file, output_dir)
+    title_wordcount = title_word_count(grouped_output_file, total_count_output_file)
+    merge(title_wordcount, analyse_result_file, output_file)
+
     e_t = time.time()
     elapsed_time = "{:.2f}".format(e_t - s_t)
-    print("elapsed_time: ", elapsed_time)
+    print(elapsed_time)
 
 if __name__ == "__main__":
-    json_file = sys.argv[1] # 'data_2024-05-27.json'
-    analyze_result_file = sys.argv[2] # "analyze_result_0527.json"
+
+    parser = argparse.ArgumentParser(description='')
+    parser.add_argument('-source_data_file', type=str, required=True,
+    help='源数据文件的路径。')
+    parser.add_argument('-topic_sentiment_result_file', type=str, required=True,
+    help='结合了情感分析后的topic分析结果文件的路径。')
+    parser.add_argument('-totalwc_target_file', type=str, required=True,
+    help='总词频的保存路径。')
+    parser.add_argument('-topic_senti_wc_target_file', type=str, required=True,
+    help='单事件词频集成到topic+情感结果文件的保存路径。')
+
+    args = parser.parse_args()
+    json_file = args.source_data_file
+    topic_sentiment_result_file = args.topic_sentiment_result_file # "analyze_result_0527.json"
+    total_count_output_file = args.totalwc_target_file # 总词频
+    output_file = args.topic_senti_wc_target_file # 单事件词频集成到结果文件
+    
+    stopwords_file = os.path.join(Path(__file__).resolve().parent, 'stopwords.txt')
 
     # 获取当前的日期和时间
     current_datetime = datetime.now()
     # 格式化当前日期和时间为字符串
     formatted_datetime = current_datetime.strftime("%m%d%H%M%S")
 
-    grouped_output_file = "can_delete_title_group_texts"+ "_" + formatted_datetime + ".json"
-    output_dir = "title_count_"+json_file[:-5]+"_keybert"
+    grouped_output_file = total_count_output_file[:-5] + "can_delete_later__title_group_texts"+ "_" + formatted_datetime + ".json"
+    # output_dir = "title_count_"+json_file[:-5]+"_jieba"
 
-    do_process(json_file, analyze_result_file, grouped_output_file, output_dir)
-
+    do_process(json_file, topic_sentiment_result_file, grouped_output_file, total_count_output_file, output_file)

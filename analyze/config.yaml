@@ -1,6 +1,4 @@
 crawler:
   target: "test" #"latest" # latest or large_batch
 
-wordcount: "jieba" # or "keybert"
-
 remain_outputs: true # or false

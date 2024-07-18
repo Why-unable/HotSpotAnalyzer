@@ -17,6 +17,7 @@ DIRECTORIES := $(shell dirname $(CURDIR))/result/topic_data \
 			$(shell dirname $(CURDIR))/result/graph \
 			$(shell dirname $(CURDIR))/result/sentiment/post_sentiment \
 			$(shell dirname $(CURDIR))/result/word_cloud/jieba_wordcount \
+			$(shell dirname $(CURDIR))/result/word_cloud/keybert_wordcount
 			$(shell dirname $(CURDIR))/result/weibo_data
 # 结果文件名
 date_json_file := $(shell date +"%Y-%m-%d.json")
@@ -33,6 +34,7 @@ post_senti_target_file := $(shell dirname $(CURDIR))/result/sentiment/post_senti
 topic_sentiment_target_file := $(shell dirname $(CURDIR))/result/topic_data/$(date_json_file)
 # 词频
 total_jiebawordcount_target_file := $(shell dirname $(CURDIR))/result/word_cloud/jieba_wordcount/$(date_json_file)
+total_keybertwordcount_target_file := $(shell dirname $(CURDIR))/result/word_cloud/keybert_wordcount/$(date_json_file)
 topic_sentiment_wordcount_target_file := $(shell dirname $(CURDIR))/result/topic_data/$(date_json_file)
 
 
@@ -41,6 +43,7 @@ topic_sentiment_wordcount_target_file := $(shell dirname $(CURDIR))/result/topic
 # 读取配置文件，获取爬虫目标target：latest或者large_batch
 config := $(CURDIR)/config.yaml
 crawler_target := $(shell yq eval '.crawler.target' $(config))
+wordcount_method := $(shell yq eval '.wordcount' $(config))
 # yq (https://github.com/mikefarah/yq/) version v4.44.1 (snap install yq)
 
 
@@ -131,6 +134,28 @@ sentiment_and_wordcount: topic_analyze
 		-totalwc_target_file $(total_jiebawordcount_target_file) \
 		-topic_senti_wc_target_file $(topic_sentiment_wordcount_target_file) \
 		> wordcount.log 2>&1
+
+ifeq ($(wordcount_method), jieba) 
+	@echo "running jieba wordcount" | sed 's/^/\t/'
+	@cd $(wordcount_dir) && poetry run python title_wordcount_jieba.py \
+		-source_data_file $(month_data_file) \
+		-topic_sentiment_result_file $(topic_sentiment_target_file) \
+		-totalwc_target_file $(total_jiebawordcount_target_file) \
+		-topic_senti_wc_target_file $(topic_sentiment_wordcount_target_file) \
+		> wordcount.log 2>&1
+else 
+  ifeq ($(wordcount_method), keybert)
+		@echo "running wordcount"
+		@cd $(wordcount_dir) && python title_wordcount_keybert.py \
+			-source_data_file $(month_data_file) \
+			-topic_sentiment_result_file $(topic_sentiment_target_file) \
+			-totalwc_target_file $(total_keybertwordcount_target_file) \
+			-topic_senti_wc_target_file $(topic_sentiment_wordcount_target_file) \
+			> wordcount.log 2>&1
+  else
+		@echo "不存在的wordcount选项：$(wordcount_method)" | sed 's/^/\t/'
+  endif 
+endif
 
 
 import_data: sentiment_and_wordcount
